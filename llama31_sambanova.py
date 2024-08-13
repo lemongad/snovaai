@@ -6,14 +6,23 @@ from pydantic import BaseModel
 import subprocess
 import os
 import asyncio
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Adding CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class Completion(BaseModel):
     model: str = '405b'
     messages: list[object]
     stream: bool = True
-
 
 @app.post("/v1/chat/completions")
 async def completions(completion: Completion = Body(...)):
@@ -32,9 +41,7 @@ async def completions(completion: Completion = Body(...)):
     data = {
         "body": {
             "messages": completion.messages,
-            "stop": [
-                "<|eot_id|>"
-            ],
+            "stop": [""],
             "stream": True,
             "stream_options": {
                 "include_usage": True
@@ -44,11 +51,9 @@ async def completions(completion: Completion = Body(...)):
         "env_type": default_env_type
     }
 
-
     response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
     if completion.stream:
         return StreamingResponse(response.iter_content(), media_type="text/event-stream")
-    
     
     lines = response.text.split('\n\n')
     
@@ -79,8 +84,6 @@ async def completions(completion: Completion = Body(...)):
     last_obj['choices'] = new_lines[0]['choices']
     last_obj['choices'][0]['delta']['content'] = content
     return last_obj
-    
-
 
 if __name__ == "__main__":
     # 获取当前目录
@@ -88,5 +91,4 @@ if __name__ == "__main__":
     # 进入工作目录
     os.chdir(work_dir)
     # 使用 subprocess 模块启动 Uvicorn
-    # 注意：这样做并不是最佳实践，因为它使得脚本和服务器紧密耦合
     subprocess.run(["uvicorn", "llama31_sambanova:app", "--reload", "--host", "0.0.0.0", "--port", "8989"])
