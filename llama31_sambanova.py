@@ -41,7 +41,9 @@ async def completions(completion: Completion = Body(...)):
     data = {
         "body": {
             "messages": completion.messages,
-            "stop": [""],
+            "stop": [
+                "<|eot_id|>"
+            ],
             "stream": True,
             "stream_options": {
                 "include_usage": True
