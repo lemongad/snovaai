@@ -22,7 +22,7 @@ app.add_middleware(
 class Completion(BaseModel):
     model: str = '405b'
     messages: list[object]
-    stream: bool = True
+    stream: bool = None  # 默认为 None 表示未指定
 
 @app.post("/v1/chat/completions")
 async def completions(completion: Completion = Body(...)):
@@ -44,7 +44,7 @@ async def completions(completion: Completion = Body(...)):
             "stop": [
                 "<|eot_id|>"
             ],
-            "stream": True,
+            "stream": True,  # 向外部 API 请求时始终使用流式
             "stream_options": {
                 "include_usage": True
             },
@@ -54,9 +54,12 @@ async def completions(completion: Completion = Body(...)):
     }
 
     response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+
+    # 如果stream参数未指定（None）或者为False，返回非流式
     if completion.stream:
         return StreamingResponse(response.iter_content(), media_type="text/event-stream")
     
+    # 非流式处理
     lines = response.text.split('\n\n')
     
     new_lines = []
