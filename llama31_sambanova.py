@@ -1,11 +1,10 @@
-import requests
+import aiohttp
 import json
-from fastapi import FastAPI, Request, Response, Body
+from fastapi import FastAPI, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import subprocess
 import os
-import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -53,42 +52,43 @@ async def completions(completion: Completion = Body(...)):
         "env_type": default_env_type
     }
 
-    response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
-
-    # 如果stream参数未指定（None）或者为False，返回非流式
-    if completion.stream:
-        return StreamingResponse(response.iter_content(), media_type="text/event-stream")
-    
-    # 非流式处理
-    lines = response.text.split('\n\n')
-    
-    new_lines = []
-    for line in lines:
-        if not line.startswith('data:'):
-            continue
-        line = line.removeprefix('data: ')
-        if 'DONE' in line:
-            continue
-        j = json.loads(line)
-        new_lines.append(j)
-    
-    # 获取数组最后一个对象
-    last_obj = new_lines[-1]
-    
-    content = ''
-    for line in new_lines:
-        if len(line['choices']) == 0:
-            continue
-        delta = line['choices'][0]['delta']
-        if 'content' not in delta:
-            continue
-        # 判断是否有content对象
-        if 'content' in delta:
-            content += line['choices'][0]['delta']['content']
-    
-    last_obj['choices'] = new_lines[0]['choices']
-    last_obj['choices'][0]['delta']['content'] = content
-    return last_obj
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            # 如果stream参数未指定（None）或者为False，返回非流式
+            if completion.stream:
+                return StreamingResponse(response.content.iter_any(), media_type="text/event-stream")
+            
+            # 非流式处理
+            text = await response.text()
+            lines = text.split('\n\n')
+            
+            new_lines = []
+            for line in lines:
+                if not line.startswith('data:'):
+                    continue
+                line = line.removeprefix('data: ')
+                if 'DONE' in line:
+                    continue
+                j = json.loads(line)
+                new_lines.append(j)
+            
+            # 获取数组最后一个对象
+            last_obj = new_lines[-1]
+            
+            content = ''
+            for line in new_lines:
+                if len(line['choices']) == 0:
+                    continue
+                delta = line['choices'][0]['delta']
+                if 'content' not in delta:
+                    continue
+                # 判断是否有content对象
+                if 'content' in delta:
+                    content += line['choices'][0]['delta']['content']
+            
+            last_obj['choices'] = new_lines[0]['choices']
+            last_obj['choices'][0]['delta']['content'] = content
+            return last_obj
 
 if __name__ == "__main__":
     # 获取当前目录
