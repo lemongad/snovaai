@@ -1,43 +1,40 @@
+import requests
 import json
-import os
-from typing import List, Dict
-
-import aiohttp
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Request, Response, Body
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+import subprocess
+import os
 import asyncio
-import logging
-
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# 配置
-API_URL = os.getenv("API_URL", "https://fast.snova.ai/api/completion")
-DEFAULT_MAX_TOKENS = 800
-DEFAULT_STOP = ["<|eot_id|>"]
 
 app = FastAPI()
 
-async def event_stream(lines: List[str]):
-    for line in lines:
-        yield line + '\n\n'
+class Completion(BaseModel):
+    model: str = '405b'
+    messages: list[object]
+    stream: bool = True
 
-async def call_api(messages: Dict, model: str) -> aiohttp.ClientResponse:
+
+@app.post("/v1/chat/completions")
+async def completions(completion: Completion = Body(...)):
+    print('接收参数：', completion)
+
+    url = 'https://fast.snova.ai/api/completion'
     headers = {
-        'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36',
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
     }
     
-    default_model = f"llama3-{model}"
-    default_env_type = f'tp16{model}'
+    default_model = f"llama3-{completion.model}"
+    default_env_type = f'tp16{completion.model}'
 
     data = {
         "body": {
-            "messages": messages['messages'],
-            "max_tokens": DEFAULT_MAX_TOKENS,
-            "stop": DEFAULT_STOP,
+            "messages": completion.messages,
+            "stop": [
+                "<|eot_id|>"
+            ],
             "stream": True,
             "stream_options": {
                 "include_usage": True
@@ -47,32 +44,49 @@ async def call_api(messages: Dict, model: str) -> aiohttp.ClientResponse:
         "env_type": default_env_type
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(API_URL, headers=headers, json=data) as response:
-            return await response.text()
 
-@app.post("/v1/chat/completions")
-async def completions(messages: Dict = Body(...)):
-    logger.info(f'Received parameters: {messages}')
-
-    model = messages.get('model', '405b')
+    response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+    if completion.stream:
+        return StreamingResponse(response.iter_content(), media_type="text/event-stream")
     
-    try:
-        response_text = await call_api(messages, model)
-        lines = response_text.splitlines()
-        
-        logger.info(f'API response: {response_text}')
-        
-        headers = {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-        return StreamingResponse(event_stream(lines), headers=headers)
-    except Exception as e:
-        logger.error(f"An error occurred: {str(e)}")
-        return {"error": "An internal error occurread"}, 500
+    
+    lines = response.text.split('\n\n')
+    
+    new_lines = []
+    for line in lines:
+        if not line.startswith('data:'):
+            continue
+        line = line.removeprefix('data: ')
+        if 'DONE' in line:
+            continue
+        j = json.loads(line)
+        new_lines.append(j)
+    
+    # 获取数组最后一个对象
+    last_obj = new_lines[-1]
+    
+    content = ''
+    for line in new_lines:
+        if len(line['choices']) == 0:
+            continue
+        delta = line['choices'][0]['delta']
+        if 'content' not in delta:
+            continue
+        # 判断是否有content对象
+        if 'content' in delta:
+            content += line['choices'][0]['delta']['content']
+    
+    last_obj['choices'] = new_lines[0]['choices']
+    last_obj['choices'][0]['delta']['content'] = content
+    return last_obj
+    
+
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("llama31_sambanova:app", host="0.0.0.0", port=8989, reload=True)
+    # 获取当前目录
+    work_dir = os.path.dirname(os.path.abspath(__file__))
+    # 进入工作目录
+    os.chdir(work_dir)
+    # 使用 subprocess 模块启动 Uvicorn
+    # 注意：这样做并不是最佳实践，因为它使得脚本和服务器紧密耦合
+    subprocess.run(["uvicorn", "llama31_sambanova:app", "--reload", "--host", "0.0.0.0", "--port", "8989"])
